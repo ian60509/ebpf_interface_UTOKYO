@@ -93,7 +93,7 @@ func main() {
 	if *includeDebug {
 		debugCounters = objs.DebugCounters
 	}
-	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters, objs.IpBlacklist)
+	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters, objs.IpBlacklist, objs.DestBlacklist)
 	if err != nil {
 		log.Fatalf("create eBPF manager: %v", err)
 	}
@@ -105,6 +105,15 @@ func main() {
 			log.Printf("populate ip blacklist: %v", err)
 		} else {
 			log.Printf("populated ip_blacklist with 10.60.100.1")
+		}
+	}
+
+	// Populate default destination blacklist (hard-coded 1.1.1.1)
+	if objs.DestBlacklist != nil {
+		if err := pkg.PopulateDestBlacklist(objs.DestBlacklist); err != nil {
+			log.Printf("populate dest blacklist: %v", err)
+		} else {
+			log.Printf("populated dest_blacklist with 1.1.1.1")
 		}
 	}
 
@@ -158,6 +167,9 @@ func main() {
 			// update UI with current blacklist contents
 			if bl, err := ebpfMgr.GetBlacklist(); err == nil {
 				display.UpdateBlacklist(bl)
+			}
+			if dbl, err := ebpfMgr.GetDestBlacklist(); err == nil {
+				display.UpdateDestBlacklist(dbl)
 			}
 			if *includeDebug && ebpfMgr.HasDebugCounters() {
 				totalSeen, _ := ebpfMgr.GetDebugCounter(0)

@@ -16,9 +16,10 @@ type EBPFManager struct {
 	unknownCount  *ebpf.Map
 	debugCounters *ebpf.Map
 	ipBlacklist   *ebpf.Map
+	destBlacklist *ebpf.Map
 }
 
-func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklistMap *ebpf.Map) (*EBPFManager, error) {
+func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklistMap, destBlacklistMap *ebpf.Map) (*EBPFManager, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
@@ -35,6 +36,7 @@ func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklist
 		unknownCount:  unknownCountMap,
 		debugCounters: debugCountersMap,
 		ipBlacklist:   ipBlacklistMap,
+		destBlacklist: destBlacklistMap,
 	}, nil
 }
 
@@ -159,6 +161,32 @@ func (em *EBPFManager) GetBlacklist() ([]string, error) {
 	}
 	if err := iter.Err(); err != nil {
 		return nil, fmt.Errorf("iterate ip_blacklist: %w", err)
+	}
+	return result, nil
+}
+
+// GetDestBlacklist returns a list of destination IP strings currently present in the dest_blacklist map.
+func (em *EBPFManager) GetDestBlacklist() ([]string, error) {
+	if em.destBlacklist == nil {
+		return nil, fmt.Errorf("dest_blacklist map is not available")
+	}
+
+	result := []string{}
+	iter := em.destBlacklist.Iterate()
+	var key uint32
+	var value uint8
+	for iter.Next(&key, &value) {
+		// The key stored in the map uses the raw IP bytes. On little-endian
+		// hosts the uint32 value will have the IP in little-endian order in
+		// memory, so reconstruct bytes accordingly.
+		b := []byte{byte(key & 0xff), byte((key >> 8) & 0xff), byte((key >> 16) & 0xff), byte((key >> 24) & 0xff)}
+		ip := net.IPv4(b[0], b[1], b[2], b[3]).String()
+		if value != 0 {
+			result = append(result, ip)
+		}
+	}
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dest_blacklist: %w", err)
 	}
 	return result, nil
 }

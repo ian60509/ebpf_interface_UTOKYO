@@ -32,3 +32,28 @@ func PopulateHardcodedBlacklist(m *ebpf.Map) error {
 
 	return nil
 }
+
+// PopulateDestBlacklist inserts a hard-coded blocked destination IP (1.1.1.1)
+// into the provided eBPF map. Keys are IPv4 in network byte order.
+func PopulateDestBlacklist(m *ebpf.Map) error {
+	if m == nil {
+		return fmt.Errorf("dest_blacklist map is nil")
+	}
+
+	ip := net.ParseIP("1.1.1.1").To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP")
+	}
+
+	// Store key so its in-memory byte layout equals the IP bytes (network order).
+	// On little-endian hosts we must interpret the bytes as little-endian uint32
+	// so that the map key's raw bytes match inner_ip->daddr in the kernel.
+	key := binary.LittleEndian.Uint32(ip)
+	var val uint8 = 1
+
+	if err := m.Update(&key, &val, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("update dest_blacklist: %w", err)
+	}
+
+	return nil
+}

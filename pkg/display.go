@@ -33,7 +33,8 @@ type StatisticsDisplay struct {
 	fallback     *widgets.Paragraph
 
 	// blacklist snapshot for UI
-	blacklist []string
+	blacklist     []string
+	destBlacklist []string
 
 	selectedIndex int
 
@@ -317,7 +318,24 @@ func (sd *StatisticsDisplay) render() {
 		}
 	}
 
-	sd.legend.Text = fmt.Sprintf("Total=White  Selected=Cyan\nY ticks: %.2f | %.2f | 0.00 Mbps\nLimit: %.2f Mbps\nBlacklist: %s", yMax, yMid, sd.limitMbps, blSummary)
+	// build dest blacklist summary
+	dblSummary := "none"
+	if len(sd.destBlacklist) > 0 {
+		// show up to 3 entries
+		maxShow := 3
+		if len(sd.destBlacklist) < maxShow {
+			maxShow = len(sd.destBlacklist)
+		}
+		dblSummary = sd.destBlacklist[0]
+		for i := 1; i < maxShow; i++ {
+			dblSummary += ", " + sd.destBlacklist[i]
+		}
+		if len(sd.destBlacklist) > maxShow {
+			dblSummary += ", ..."
+		}
+	}
+
+	sd.legend.Text = fmt.Sprintf("Total=White  Selected=Cyan\nY ticks: %.2f | %.2f | 0.00 Mbps\nLimit: %.2f Mbps\nIP Blacklist: %s\nDest Blacklist: %s", yMax, yMid, sd.limitMbps, blSummary, dblSummary)
 
 	currentTotal := lastOrZero(sd.totalSeries)
 	currentSelected := lastOrZero(sd.selectedSeries)
@@ -452,6 +470,13 @@ func (sd *StatisticsDisplay) PrintSummary(stats map[uint64]PacketStats, unknownC
 func (sd *StatisticsDisplay) UpdateBlacklist(entries []string) {
 	sd.mu.Lock()
 	sd.blacklist = entries
+	sd.mu.Unlock()
+}
+
+// UpdateDestBlacklist sets the current destination blacklist entries for UI display.
+func (sd *StatisticsDisplay) UpdateDestBlacklist(entries []string) {
+	sd.mu.Lock()
+	sd.destBlacklist = entries
 	sd.mu.Unlock()
 }
 

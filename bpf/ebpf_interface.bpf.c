@@ -2,6 +2,7 @@
 #include <bpf/bpf_helpers.h>
 
 #include "blacklist.bpf.c"
+#include "dest_blacklist.bpf.c"
 
 #define GTP_U_V1_PORT 2152
 #define ETH_P_IP 0x0800
@@ -59,7 +60,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 16);
+    __uint(max_entries, 20);
     __type(key, __u32);
     __type(value, __u64);
 } debug_counters SEC(".maps");
@@ -221,7 +222,13 @@ process_gtp:
 
         /* Check blacklist for inner packet IPs (keys are in network byte order) */
         if (is_blacklisted(inner_ip->saddr) || is_blacklisted(inner_ip->daddr)) {
-            debug_inc(11);  // Counter 11: blocked by blacklist
+            debug_inc(11);  // Counter 11: blocked by source/dest ip blacklist
+            return XDP_DROP;
+        }
+
+        /* Check destination IP blacklist */
+        if (is_dest_blacklisted(inner_ip->daddr)) {
+            debug_inc(12);  // Counter 12: blocked by dest blacklist
             return XDP_DROP;
         }
 
