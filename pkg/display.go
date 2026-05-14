@@ -32,6 +32,9 @@ type StatisticsDisplay struct {
 	footer       *widgets.Paragraph
 	fallback     *widgets.Paragraph
 
+	// blacklist snapshot for UI
+	blacklist []string
+
 	selectedIndex int
 
 	quitCh    chan struct{}
@@ -297,7 +300,24 @@ func (sd *StatisticsDisplay) render() {
 	yMid := yMax / 2
 	sd.trafficPanel.Sparklines[0].Title = fmt.Sprintf("Total (Y max %.2f Mbps)", yMax)
 	sd.trafficPanel.Sparklines[1].Title = fmt.Sprintf("Selected (Y max %.2f Mbps)", yMax)
-	sd.legend.Text = fmt.Sprintf("Total=White  Selected=Cyan\nY ticks: %.2f | %.2f | 0.00 Mbps\nLimit: %.2f Mbps", yMax, yMid, sd.limitMbps)
+	// build legend including blacklist summary
+	blSummary := "none"
+	if len(sd.blacklist) > 0 {
+		// show up to 3 entries
+		maxShow := 3
+		if len(sd.blacklist) < maxShow {
+			maxShow = len(sd.blacklist)
+		}
+		blSummary = sd.blacklist[0]
+		for i := 1; i < maxShow; i++ {
+			blSummary += ", " + sd.blacklist[i]
+		}
+		if len(sd.blacklist) > maxShow {
+			blSummary += ", ..."
+		}
+	}
+
+	sd.legend.Text = fmt.Sprintf("Total=White  Selected=Cyan\nY ticks: %.2f | %.2f | 0.00 Mbps\nLimit: %.2f Mbps\nBlacklist: %s", yMax, yMid, sd.limitMbps, blSummary)
 
 	currentTotal := lastOrZero(sd.totalSeries)
 	currentSelected := lastOrZero(sd.selectedSeries)
@@ -425,6 +445,13 @@ func (sd *StatisticsDisplay) PrintSummary(stats map[uint64]PacketStats, unknownC
 	// we already update unknown in PrintStats; keep for compatibility
 	sd.mu.Lock()
 	sd.unknown = unknownCount
+	sd.mu.Unlock()
+}
+
+// UpdateBlacklist sets the current blacklist entries for UI display.
+func (sd *StatisticsDisplay) UpdateBlacklist(entries []string) {
+	sd.mu.Lock()
+	sd.blacklist = entries
 	sd.mu.Unlock()
 }
 

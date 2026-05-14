@@ -1,6 +1,8 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
 
+#include "blacklist.bpf.c"
+
 #define GTP_U_V1_PORT 2152
 #define ETH_P_IP 0x0800
 #define IPPROTO_UDP 17
@@ -57,7 +59,7 @@ struct {
 
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 10);
+    __uint(max_entries, 16);
     __type(key, __u32);
     __type(value, __u64);
 } debug_counters SEC(".maps");
@@ -216,7 +218,13 @@ process_gtp:
         }
 
         debug_inc(10);  // Counter 10: Valid inner IPv4
-        
+
+        /* Check blacklist for inner packet IPs (keys are in network byte order) */
+        if (is_blacklisted(inner_ip->saddr) || is_blacklisted(inner_ip->daddr)) {
+            debug_inc(11);  // Counter 11: blocked by blacklist
+            return XDP_DROP;
+        }
+
         struct packet_stats *stats = lookup_or_create_stats(
             iph->saddr, iph->daddr,
             inner_ip->saddr, inner_ip->daddr,

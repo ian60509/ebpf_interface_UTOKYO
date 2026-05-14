@@ -93,11 +93,20 @@ func main() {
 	if *includeDebug {
 		debugCounters = objs.DebugCounters
 	}
-	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters)
+	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters, objs.IpBlacklist)
 	if err != nil {
 		log.Fatalf("create eBPF manager: %v", err)
 	}
 	defer ebpfMgr.Close()
+
+	// Populate default blacklist (hard-coded 10.60.100.1)
+	if objs.IpBlacklist != nil {
+		if err := pkg.PopulateHardcodedBlacklist(objs.IpBlacklist); err != nil {
+			log.Printf("populate ip blacklist: %v", err)
+		} else {
+			log.Printf("populated ip_blacklist with 10.60.100.1")
+		}
+	}
 
 	// Attach TC BPF program to interface
 	if err := ebpfMgr.AttachXDP(*ifaceName, objs.XdpGtpParse); err != nil {
@@ -145,6 +154,11 @@ func main() {
 			display.PrintDestinationStats(destinationStats)
 			display.PrintStats(stats, unknown)
 			display.PrintSummary(stats, unknown)
+
+			// update UI with current blacklist contents
+			if bl, err := ebpfMgr.GetBlacklist(); err == nil {
+				display.UpdateBlacklist(bl)
+			}
 			if *includeDebug && ebpfMgr.HasDebugCounters() {
 				totalSeen, _ := ebpfMgr.GetDebugCounter(0)
 				canReadEth, _ := ebpfMgr.GetDebugCounter(1)
