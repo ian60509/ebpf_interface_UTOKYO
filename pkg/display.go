@@ -32,6 +32,10 @@ func (sd *StatisticsDisplay) printDivider() {
 	fmt.Println("+------+---------------+---------------+---------------+---------------+----------+------------+")
 }
 
+func (sd *StatisticsDisplay) printDestinationDivider() {
+	fmt.Println("+------+---------------------+------------+")
+}
+
 func (sd *StatisticsDisplay) PrintColumnHeaders() {
 	fmt.Printf("| %-4s | %-13s | %-13s | %-13s | %-13s | %-8s | %-10s |\n",
 		"Seq", "Outer Src IP", "Outer Dst IP", "Inner Src IP", "Inner Dst IP", "TEID", "Packets")
@@ -70,6 +74,31 @@ func (sd *StatisticsDisplay) PrintStats(stats map[uint64]PacketStats, unknownCou
 	}
 
 	sd.printDivider()
+}
+
+func (sd *StatisticsDisplay) PrintDestinationStats(stats map[uint32]uint64) {
+	fmt.Println("| Destination IP Statistics                                                    |")
+	sd.printDestinationDivider()
+	fmt.Printf("| %-4s | %-19s | %-10s |\n", "Seq", "Destination IP", "Packets")
+	sd.printDestinationDivider()
+
+	if len(stats) == 0 {
+		fmt.Printf("| %-4s | %-19s | %-10d |\n", "-", "No destination stats", 0)
+		sd.printDestinationDivider()
+		return
+	}
+
+	keys := make([]uint32, 0, len(stats))
+	for key := range stats {
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+
+	for seq, key := range keys {
+		fmt.Printf("| %-4d | %-19s | %-10d |\n", seq+1, ipToString(key), stats[key])
+	}
+
+	sd.printDestinationDivider()
 }
 
 func (sd *StatisticsDisplay) PrintSummary(stats map[uint64]PacketStats, unknownCount uint64) {

@@ -28,15 +28,16 @@ func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap *ebpf.Map) (
 	if unknownCountMap == nil {
 		return nil, fmt.Errorf("unknown_count map is nil")
 	}
-	if debugCountersMap == nil {
-		return nil, fmt.Errorf("debug_counters map is nil")
-	}
 
 	return &EBPFManager{
 		flowStats:     flowStatsMap,
 		unknownCount:  unknownCountMap,
 		debugCounters: debugCountersMap,
 	}, nil
+}
+
+func (em *EBPFManager) HasDebugCounters() bool {
+	return em.debugCounters != nil
 }
 
 func (em *EBPFManager) AttachXDP(ifaceName string, prog *ebpf.Program) error {
@@ -81,6 +82,24 @@ func (em *EBPFManager) GetFlowStats() (map[uint64]PacketStats, error) {
 	return result, nil
 }
 
+func (em *EBPFManager) GetDestinationStats() (map[uint32]uint64, error) {
+	result := make(map[uint32]uint64)
+
+	iter := em.flowStats.Iterate()
+	var key uint64
+	var value PacketStats
+
+	for iter.Next(&key, &value) {
+		result[value.InnerDstIP] += value.PacketCount
+	}
+
+	if err := iter.Err(); err != nil {
+		return nil, fmt.Errorf("iterate flow_stats for destination stats: %w", err)
+	}
+
+	return result, nil
+}
+
 func (em *EBPFManager) GetUnknownCount() (uint64, error) {
 	var key uint32
 	var value uint64
@@ -93,6 +112,10 @@ func (em *EBPFManager) GetUnknownCount() (uint64, error) {
 }
 
 func (em *EBPFManager) GetDebugCounter(index uint32) (uint64, error) {
+	if em.debugCounters == nil {
+		return 0, fmt.Errorf("debug counters are disabled")
+	}
+
 	var value uint64
 
 	if err := em.debugCounters.Lookup(&index, &value); err != nil {
