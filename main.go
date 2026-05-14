@@ -11,6 +11,8 @@ import (
 
 	"ebpf-interface/pkg"
 
+	"math/rand"
+
 	"github.com/cilium/ebpf"
 )
 
@@ -22,7 +24,62 @@ func main() {
 	ifaceName := flag.String("iface", defaultInterface, "network interface to attach TC BPF program")
 	interval := flag.Duration("interval", 2*time.Second, "refresh interval for stats display")
 	includeDebug := flag.Bool("debug", false, "print debug counters")
+	uiOnly := flag.Bool("ui-only", false, "run UI with simulated data (no eBPF); for testing only")
 	flag.Parse()
+
+	// If ui-only, skip eBPF and run simulated updates for UI debugging
+	if *uiOnly {
+		display := pkg.NewStatisticsDisplay(*ifaceName)
+		display.PrintHeader()
+		display.PrintColumnHeaders()
+
+		// simulate some flows
+		randSrc := rand.New(rand.NewSource(time.Now().UnixNano()))
+		// create 5 simulated flows with different innerDst IPs
+		simStats := make(map[uint64]pkg.PacketStats)
+		for i := 0; i < 5; i++ {
+			innerDst := uint32(0x0a000100 + uint32(i)) // 10.0.1.0 + i
+			innerSrc := uint32(0x0a000200 + uint32(i))
+			key := (uint64(innerSrc) << 32) | uint64(innerDst)
+			simStats[key] = pkg.PacketStats{
+				SrcIP:       0x0a000001,
+				DstIP:       0x0a000002,
+				InnerSrcIP:  innerSrc,
+				InnerDstIP:  innerDst,
+				TEID:        uint32(i + 1),
+				PacketCount: 0,
+			}
+		}
+
+		sig := make(chan os.Signal, 1)
+		signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+
+		ticker := time.NewTicker(*interval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				// increment packets randomly and build destination stats
+				dest := make(map[uint32]uint64)
+				for k, v := range simStats {
+					inc := uint64(randSrc.Intn(200))
+					v.PacketCount += inc
+					simStats[k] = v
+					dest[v.InnerDstIP] += inc
+				}
+
+				// call display in same order as production use (destination then flows)
+				display.PrintDestinationStats(dest)
+				display.PrintStats(simStats, 0)
+				display.PrintSummary(simStats, 0)
+
+			case <-sig:
+				display.Close()
+				return
+			}
+		}
+	}
 
 	// Load eBPF objects
 	objs := ebpf_interfaceObjects{}
@@ -48,6 +105,7 @@ func main() {
 	}
 
 	display := pkg.NewStatisticsDisplay(*ifaceName)
+	defer display.Close()
 	display.PrintHeader()
 	display.PrintColumnHeaders()
 
@@ -83,8 +141,9 @@ func main() {
 				unknown = 0
 			}
 
-			display.PrintStats(stats, unknown)
+			// compute destination rates using previous snapshot first, then update flows
 			display.PrintDestinationStats(destinationStats)
+			display.PrintStats(stats, unknown)
 			display.PrintSummary(stats, unknown)
 			if *includeDebug && ebpfMgr.HasDebugCounters() {
 				totalSeen, _ := ebpfMgr.GetDebugCounter(0)
