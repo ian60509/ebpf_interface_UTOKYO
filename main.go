@@ -4,81 +4,94 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/rlimit"
+	"ebpf-interface/pkg"
 )
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -target bpfel ebpf_interface bpf/ebpf_interface.bpf.c
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -type packet_stats -target bpfel ebpf_interface bpf/ebpf_interface.bpf.c
 
 const defaultInterface = "upfgtp"
 
 func main() {
-	ifaceName := flag.String("iface", defaultInterface, "network interface to attach XDP program")
-	interval := flag.Duration("interval", time.Second, "refresh interval for stats display")
+	ifaceName := flag.String("iface", defaultInterface, "network interface to attach TC BPF program")
+	interval := flag.Duration("interval", 2*time.Second, "refresh interval for stats display")
 	flag.Parse()
 
-	if err := rlimit.RemoveMemlock(); err != nil {
-		log.Fatal(err)
-	}
-
+	// Load eBPF objects
 	objs := ebpf_interfaceObjects{}
 	if err := loadEbpf_interfaceObjects(&objs, nil); err != nil {
-		log.Fatalf("loading objects: %v", err)
+		log.Fatalf("load eBPF objects: %v", err)
 	}
 	defer objs.Close()
 
-	iface, err := net.InterfaceByName(*ifaceName)
+	// Initialize eBPF manager with flow stats and unknown count maps
+	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, objs.DebugCounters)
 	if err != nil {
-		log.Fatalf("lookup interface %s: %v", *ifaceName, err)
+		log.Fatalf("create eBPF manager: %v", err)
+	}
+	defer ebpfMgr.Close()
+
+	// Attach TC BPF program to interface
+	if err := ebpfMgr.AttachXDP(*ifaceName, objs.XdpGtpParse); err != nil {
+		log.Fatalf("attach XDP BPF program: %v", err)
 	}
 
-	xdpLink, err := link.AttachXDP(link.XDPOptions{
-		Program:   objs.XdpCount,
-		Interface: iface.Index,
-		Flags:     link.XDPGenericMode,
-	})
-	if err != nil {
-		log.Fatalf("attach XDP to %s: %v", *ifaceName, err)
-	}
-	defer xdpLink.Close()
+	display := pkg.NewStatisticsDisplay(*ifaceName)
+	display.PrintHeader()
+	display.PrintColumnHeaders()
 
-	fmt.Printf("Starting packet counter on interface %s\n", *ifaceName)
-	fmt.Println("Press Ctrl+C to stop")
-
+	// Setup signal handling
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 
+	// Create ticker for periodic updates
 	ticker := time.NewTicker(*interval)
 	defer ticker.Stop()
 
-	key := uint32(0)
-	var value uint64
+	fmt.Println("Starting GTP packet capture. Press Ctrl+C to stop")
+	time.Sleep(500 * time.Millisecond)
 
 	for {
 		select {
 		case <-ticker.C:
-			if err := objs.PacketCount.Lookup(&key, &value); err != nil {
-				log.Printf("lookup packet count: %v", err)
+			stats, err := ebpfMgr.GetFlowStats()
+			if err != nil {
+				log.Printf("get flow stats: %v", err)
 				continue
 			}
-			printStats(*ifaceName, value)
+
+			unknown, err := ebpfMgr.GetUnknownCount()
+			if err != nil {
+				log.Printf("get unknown count: %v", err)
+				unknown = 0
+			}
+
+			totalSeen, _ := ebpfMgr.GetDebugCounter(0)
+			canReadEth, _ := ebpfMgr.GetDebugCounter(1)
+			ethIPv4, _ := ebpfMgr.GetDebugCounter(2)
+			canReadIP, _ := ebpfMgr.GetDebugCounter(3)
+			isIPv4, _ := ebpfMgr.GetDebugCounter(4)
+			notIPv4, _ := ebpfMgr.GetDebugCounter(5)
+			udpProto, _ := ebpfMgr.GetDebugCounter(6)
+			gtpPort, _ := ebpfMgr.GetDebugCounter(7)
+			gtpMsg0xff, _ := ebpfMgr.GetDebugCounter(8)
+			sucStats, _ := ebpfMgr.GetDebugCounter(9)
+
+			display.PrintStats(stats, unknown)
+			display.PrintSummary(stats, unknown)
+			fmt.Printf("| [DEBUG] Total: %d | CanReadEth: %d | EthIPv4: %d | CanReadIP: %d | IsIPv4: %d | NotIPv4: %d |\n",
+				totalSeen, canReadEth, ethIPv4, canReadIP, isIPv4, notIPv4)
+			fmt.Printf("| [DEBUG] UDP: %d | GTPPort: %d | GTPMsg0xFf: %d | SucStats: %d |\n",
+				udpProto, gtpPort, gtpMsg0xff, sucStats)
+			fmt.Println()
+
 		case <-sig:
-			fmt.Println("Stopping packet counter")
+			fmt.Println("\nStopping GTP packet capture")
 			return
 		}
 	}
-}
-
-func printStats(iface string, packets uint64) {
-	fmt.Println("+----------------------------+")
-	fmt.Printf("| Interface: %-12s |\n", iface)
-	fmt.Println("+----------------------------+")
-	fmt.Printf("| %-10s | %12d |\n", "Packets", packets)
-	fmt.Println("+----------------------------+")
 }
