@@ -98,6 +98,25 @@ func removeDest(ip string) error {
 	return nil
 }
 
+func limitUE2HalfMbps() error {
+	url := apiBase + "/ue-rate-limit/preset/ue2-half-mbps"
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		data, _ := ioutil.ReadAll(resp.Body)
+		return fmt.Errorf("API error: %s", string(data))
+	}
+	return nil
+}
+
 func listIP() ([]string, error) {
 	url := apiBase + "/ip-blacklist/list"
 	resp, err := http.Get(url)
@@ -142,7 +161,7 @@ func main() {
 	defer ui.Close()
 
 	list := widgets.NewList()
-	list.Title = "Controller - select entry and press Space to toggle block/unblock (q to quit)"
+	list.Title = "Controller - select entry and press Space to toggle block/unblock, L to cap UE2 at 0.5 Mbps (q to quit)"
 	list.SetRect(0, 0, 80, 20)
 	list.TextStyle = ui.NewStyle(ui.ColorWhite)
 	list.WrapText = false
@@ -150,7 +169,7 @@ func main() {
 	list.SelectedRowStyle = ui.NewStyle(ui.ColorBlack, ui.ColorCyan)
 
 	footer := widgets.NewParagraph()
-	footer.Text = "[Space] toggle  [↑/↓] navigate  [q] quit"
+	footer.Text = "[Space] toggle  [L] cap UE2 to 0.5 Mbps  [↑/↓] navigate  [q] quit"
 	footer.SetRect(0, 20, 80, 23)
 
 	status := widgets.NewParagraph()
@@ -269,6 +288,13 @@ func main() {
 					}
 				}
 
+				ui.Render(status)
+			case "l", "L":
+				if err := limitUE2HalfMbps(); err != nil {
+					status.Text = fmt.Sprintf("Limit UE2 error: %v", err)
+				} else {
+					status.Text = "Limited UE2 to 0.5 Mbps preset"
+				}
 				ui.Render(status)
 			case "<Resize>":
 				payload := e.Payload.(ui.Resize)

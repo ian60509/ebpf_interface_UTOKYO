@@ -94,7 +94,7 @@ func main() {
 	if *includeDebug {
 		debugCounters = objs.DebugCounters
 	}
-	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters, objs.IpBlacklist, objs.DestBlacklist)
+	ebpfMgr, err := pkg.NewEBPFManager(objs.FlowStats, objs.UnknownCount, debugCounters, objs.IpBlacklist, objs.DestBlacklist, objs.UeBuckets)
 	if err != nil {
 		log.Fatalf("create eBPF manager: %v", err)
 	}
@@ -107,7 +107,7 @@ func main() {
 			log.Printf("API server error: %v", err)
 		}
 	}()
-	log.Println("Blacklist API available at http://localhost:8080/api/*")
+	log.Println("Control API available at http://localhost:8080/api/*")
 
 	// Attach TC BPF program to interface
 	if err := ebpfMgr.AttachXDP(*ifaceName, objs.XdpGtpParse); err != nil {

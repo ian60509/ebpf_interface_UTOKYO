@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
@@ -18,9 +19,18 @@ type EBPFManager struct {
 	debugCounters *ebpf.Map
 	ipBlacklist   *ebpf.Map
 	destBlacklist *ebpf.Map
+	ueBuckets     *ebpf.Map
 }
 
-func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklistMap, destBlacklistMap *ebpf.Map) (*EBPFManager, error) {
+type UEBucketState struct {
+	LastTime uint64
+	Tokens   uint32
+	Rate     uint32
+	Burst    uint32
+	_        uint32
+}
+
+func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklistMap, destBlacklistMap, ueBucketsMap *ebpf.Map) (*EBPFManager, error) {
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, fmt.Errorf("remove memlock: %w", err)
 	}
@@ -38,6 +48,7 @@ func NewEBPFManager(flowStatsMap, unknownCountMap, debugCountersMap, ipBlacklist
 		debugCounters: debugCountersMap,
 		ipBlacklist:   ipBlacklistMap,
 		destBlacklist: destBlacklistMap,
+		ueBuckets:     ueBucketsMap,
 	}, nil
 }
 
@@ -266,6 +277,49 @@ func (em *EBPFManager) RemoveDestBlacklist(ipStr string) error {
 
 	if err := em.destBlacklist.Delete(&key); err != nil {
 		return fmt.Errorf("delete from dest_blacklist: %w", err)
+	}
+	return nil
+}
+
+func (em *EBPFManager) UpdateUERateLimit(ueIP string, rateMbps int, burstMB int) error {
+	if rateMbps <= 0 {
+		return fmt.Errorf("rateMbps must be greater than zero")
+	}
+	if burstMB <= 0 {
+		return fmt.Errorf("burstMB must be greater than zero")
+	}
+
+	rateBytesPerSec := uint32(rateMbps) * 1000 * 1000 / 8
+	burstBytes := uint32(burstMB) * 1000 * 1000
+	return em.updateUERateLimitBytes(ueIP, rateBytesPerSec, burstBytes)
+}
+
+func (em *EBPFManager) updateUERateLimitBytes(ueIP string, rateBytesPerSec, burstBytes uint32) error {
+	if em.ueBuckets == nil {
+		return fmt.Errorf("ue_buckets map is not available")
+	}
+	if rateBytesPerSec == 0 {
+		return fmt.Errorf("rateBytesPerSec must be greater than zero")
+	}
+	if burstBytes == 0 {
+		return fmt.Errorf("burstBytes must be greater than zero")
+	}
+
+	ip := net.ParseIP(ueIP).To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP: %s", ueIP)
+	}
+
+	key := binary.LittleEndian.Uint32(ip)
+	value := UEBucketState{
+		LastTime: uint64(time.Now().UnixNano()),
+		Tokens:   burstBytes,
+		Rate:     rateBytesPerSec,
+		Burst:    burstBytes,
+	}
+
+	if err := em.ueBuckets.Update(&key, &value, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("update ue_buckets: %w", err)
 	}
 	return nil
 }

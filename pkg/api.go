@@ -14,6 +14,13 @@ type BlacklistRequest struct {
 	IP string `json:"ip"`
 }
 
+// RateLimitRequest represents a UE rate-limit update request.
+type RateLimitRequest struct {
+	UEIP     string `json:"ue_ip"`
+	RateMbps int    `json:"rate_mbps"`
+	BurstMB  int    `json:"burst_mb"`
+}
+
 // BlacklistResponse shows current blacklist entries
 type BlacklistResponse struct {
 	Type    string   `json:"type"`
@@ -42,6 +49,8 @@ func (as *APIServer) Start() error {
 	http.HandleFunc("/api/dest-blacklist/add", as.addDestBlacklist)
 	http.HandleFunc("/api/dest-blacklist/remove", as.removeDestBlacklist)
 	http.HandleFunc("/api/dest-blacklist/list", as.listDestBlacklist)
+	http.HandleFunc("/api/ue-rate-limit/update", as.updateUERateLimit)
+	http.HandleFunc("/api/ue-rate-limit/preset/ue2-half-mbps", as.limitUE2HalfMbps)
 
 	log.Printf("Starting API server on port %s", as.port)
 	return http.ListenAndServe(":"+as.port, nil)
@@ -161,6 +170,42 @@ func (as *APIServer) listDestBlacklist(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(BlacklistResponse{Type: "dest", Entries: entries})
+}
+
+func (as *APIServer) updateUERateLimit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req RateLimitRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	if err := as.ebpfMgr.UpdateUERateLimit(req.UEIP, req.RateMbps, req.BurstMB); err != nil {
+		http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": fmt.Sprintf("Updated rate limit for %s", req.UEIP)})
+}
+
+func (as *APIServer) limitUE2HalfMbps(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	if err := as.ebpfMgr.updateUERateLimitBytes("10.60.100.2", 62500, 62500); err != nil {
+		http.Error(w, fmt.Sprintf("Error: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "Limited UE2 to 0.5 Mbps preset"})
 }
 
 // ipToKey converts IP string to little-endian uint32 key for map storage

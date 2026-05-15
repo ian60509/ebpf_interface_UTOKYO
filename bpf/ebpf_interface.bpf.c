@@ -1,5 +1,6 @@
 #include <linux/bpf.h>
 #include <bpf/bpf_helpers.h>
+#include <bpf/bpf_endian.h>
 
 #include "blacklist.bpf.c"
 #include "dest_blacklist.bpf.c"
@@ -44,6 +45,13 @@ struct packet_stats {
     __u64 packet_count;
 };
 
+struct bucket_state {
+    __u64 last_time;
+    __u32 tokens;
+    __u32 rate;
+    __u32 burst;
+};
+
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 10000);
@@ -65,6 +73,13 @@ struct {
     __type(value, __u64);
 } debug_counters SEC(".maps");
 
+struct {
+    __uint(type, BPF_MAP_TYPE_HASH);
+    __uint(max_entries, 1024);
+    __type(key, __u32);
+    __type(value, struct bucket_state);
+} ue_buckets SEC(".maps");
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 static __always_inline void debug_inc(__u32 idx) {
@@ -78,6 +93,57 @@ static __always_inline void increment_unknown(void) {
     if (value) {
         __sync_fetch_and_add(value, 1);
     }
+}
+
+static __always_inline __u32 clamp_u64_to_u32(__u64 value) {
+    if (value > (__u64)0xffffffff) {
+        return 0xffffffff;
+    }
+    return (__u32)value;
+}
+
+static __always_inline int apply_rate_limit(__u32 inner_src_ip, __u32 inner_dst_ip, __u32 payload_len) {
+    __u32 key = inner_src_ip;
+    struct bucket_state *state = bpf_map_lookup_elem(&ue_buckets, &key);
+
+    if (!state) {
+        key = inner_dst_ip;
+        state = bpf_map_lookup_elem(&ue_buckets, &key);
+    }
+
+    if (!state) {
+        return XDP_PASS;
+    }
+
+    __u64 now = bpf_ktime_get_ns();
+    __u64 delta = now - state->last_time;
+    __u64 rate = state->rate;
+    __u64 refill = 0;
+
+    if (delta > 0 && rate > 0) {
+        if (delta > (__u64)0xffffffffffffffff / rate) {
+            delta = (__u64)0xffffffffffffffff / rate;
+        }
+        refill = (delta * rate) / 1000000000ULL;
+    }
+
+    __u64 tokens = state->tokens;
+    __u64 burst = state->burst;
+
+    tokens += refill;
+    if (tokens > burst) {
+        tokens = burst;
+    }
+
+    if (tokens < payload_len) {
+        state->tokens = clamp_u64_to_u32(tokens);
+        return XDP_DROP;
+    }
+
+    tokens -= payload_len;
+    state->tokens = clamp_u64_to_u32(tokens);
+    state->last_time = now;
+    return XDP_PASS;
 }
 
 static __always_inline struct packet_stats* lookup_or_create_stats(
@@ -229,6 +295,12 @@ process_gtp:
         /* Check destination IP blacklist */
         if (is_dest_blacklisted(inner_ip->daddr)) {
             debug_inc(12);  // Counter 12: blocked by dest blacklist
+            return XDP_DROP;
+        }
+
+        __u32 payload_len = bpf_ntohs(inner_ip->tot_len);
+        if (apply_rate_limit(inner_ip->saddr, inner_ip->daddr, payload_len) != XDP_PASS) {
+            debug_inc(13);  // Counter 13: blocked by rate limiter
             return XDP_DROP;
         }
 
