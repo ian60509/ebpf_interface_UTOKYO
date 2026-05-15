@@ -95,25 +95,21 @@ func (sd *StatisticsDisplay) initWidgets() {
 	sd.header.Text = "Initializing..."
 	sd.header.SetRect(0, 0, 120, 3)
 
-	totalSpark := widgets.NewSparkline()
-	totalSpark.Title = "Total"
-	totalSpark.LineColor = ui.ColorWhite
 	selectedSpark := widgets.NewSparkline()
-	selectedSpark.Title = "Selected"
+	selectedSpark.Title = ""
 	selectedSpark.LineColor = ui.ColorCyan
 
-	sd.trafficPanel = widgets.NewSparklineGroup(totalSpark, selectedSpark)
-	sd.trafficPanel.Title = "Real-time Traffic Analytics (Last 60s)"
-	sd.trafficPanel.SetRect(0, 3, 80, 15)
+	// Use a single traffic panel with Selected series only.
+	sd.trafficPanel = widgets.NewSparklineGroup(selectedSpark)
+	sd.trafficPanel.Title = "Real-time Traffic (60s)"
+	sd.trafficPanel.SetRect(0, 3, 120, 15)
 
 	sd.fallback = widgets.NewParagraph()
 	sd.fallback.Title = "Render Fallback"
 	sd.fallback.SetRect(0, 3, 80, 15)
 
-	sd.legend = widgets.NewParagraph()
-	sd.legend.Title = "Legend"
-	sd.legend.Text = "Total=White  Selected=Cyan\nY ticks shown as text"
-	sd.legend.SetRect(80, 3, 120, 7)
+	// remove right-side legend (we don't need separate legend anymore)
+	sd.legend = nil
 
 	sd.ueTable = widgets.NewTable()
 	sd.ueTable.Title = "User Equipment (UE) List"
@@ -270,84 +266,30 @@ func (sd *StatisticsDisplay) render() {
 
 	// middle panel using sparklines for stability.
 	const targetLen = 60
-	totalP := padToLen(sd.totalSeries, targetLen)
 	selectedP := padToLen(sd.selectedSeries, targetLen)
 
-	totalData := make([]float64, 0, len(totalP))
 	selectedData := make([]float64, 0, len(selectedP))
 	for i := 0; i < targetLen; i++ {
-		totalData = append(totalData, toSparkValue(totalP[i]))
 		selectedData = append(selectedData, toSparkValue(selectedP[i]))
 	}
 
-	sd.trafficPanel.Sparklines[0].Data = totalData
-	sd.trafficPanel.Sparklines[1].Data = selectedData
+	sd.trafficPanel.Sparklines[0].Data = selectedData
 
-	// Y-axis max for Total/Selected shown next to labels.
-	yMax := 0.0
-	for _, v := range totalP {
-		if v > yMax {
-			yMax = v
-		}
-	}
-	for _, v := range selectedP {
-		if v > yMax {
-			yMax = v
-		}
-	}
-	if yMax < 1.0 {
-		yMax = 1.0
-	}
-	yMid := yMax / 2
-	sd.trafficPanel.Sparklines[0].Title = fmt.Sprintf("Total (Y max %.2f Mbps)", yMax)
-	sd.trafficPanel.Sparklines[1].Title = fmt.Sprintf("Selected (Y max %.2f Mbps)", yMax)
-	// build legend including blacklist summary
-	blSummary := "none"
-	if len(sd.blacklist) > 0 {
-		// show up to 3 entries
-		maxShow := 3
-		if len(sd.blacklist) < maxShow {
-			maxShow = len(sd.blacklist)
-		}
-		blSummary = sd.blacklist[0]
-		for i := 1; i < maxShow; i++ {
-			blSummary += ", " + sd.blacklist[i]
-		}
-		if len(sd.blacklist) > maxShow {
-			blSummary += ", ..."
-		}
-	}
-
-	// build dest blacklist summary
-	dblSummary := "none"
-	if len(sd.destBlacklist) > 0 {
-		// show up to 3 entries
-		maxShow := 3
-		if len(sd.destBlacklist) < maxShow {
-			maxShow = len(sd.destBlacklist)
-		}
-		dblSummary = sd.destBlacklist[0]
-		for i := 1; i < maxShow; i++ {
-			dblSummary += ", " + sd.destBlacklist[i]
-		}
-		if len(sd.destBlacklist) > maxShow {
-			dblSummary += ", ..."
-		}
-	}
-
-	sd.legend.Text = fmt.Sprintf("Total=White  Selected=Cyan\nY ticks: %.2f | %.2f | 0.00 Mbps\nLimit: %.2f Mbps\nIP Blacklist: %s\nDest Blacklist: %s", yMax, yMid, sd.limitMbps, blSummary, dblSummary)
-
-	currentTotal := lastOrZero(sd.totalSeries)
 	currentSelected := lastOrZero(sd.selectedSeries)
-	sd.trafficPanel.Title = fmt.Sprintf("Real-time Traffic (60s)  T=%.2f  S=%.2f Mbps", currentTotal, currentSelected)
+	sd.trafficPanel.Title = fmt.Sprintf("Real-time Traffic (60s)  S=%.2f Mbps", currentSelected)
 
 	if sd.hasPanic {
-		sd.fallback.Text = fmt.Sprintf("Previous render panic detected.\nTotal: %.2f Mbps\nSelected: %.2f Mbps\nLimit: %.2f Mbps", currentTotal, currentSelected, sd.limitMbps)
-		ui.Render(sd.header, sd.fallback, sd.legend, sd.ueTable, sd.destBar, sd.footer)
+		sd.fallback.Text = fmt.Sprintf("Previous render panic detected.\nSelected: %.2f Mbps\nLimit: %.2f Mbps", currentSelected, sd.limitMbps)
+		if sd.legend != nil {
+			ui.Render(sd.header, sd.fallback, sd.ueTable, sd.destBar, sd.footer)
+		} else {
+			ui.Render(sd.header, sd.fallback, sd.trafficPanel, sd.ueTable, sd.destBar, sd.footer)
+		}
 		return
 	}
 
-	ui.Render(sd.header, sd.trafficPanel, sd.legend, sd.ueTable, sd.destBar, sd.footer)
+	// Render without the right-side legend
+	ui.Render(sd.header, sd.trafficPanel, sd.ueTable, sd.destBar, sd.footer)
 }
 
 // PrintHeader kept for compatibility; initial UI is handled in NewStatisticsDisplay
