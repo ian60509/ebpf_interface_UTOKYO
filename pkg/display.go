@@ -56,6 +56,9 @@ type StatisticsDisplay struct {
 	// current per-flow rates (Mbps)
 	flowRates map[uint64]float64
 
+	// per-flow history buffers (Mbps)
+	flowHistories map[uint64][]float64
+
 	limitMbps float64
 }
 
@@ -68,7 +71,9 @@ func NewStatisticsDisplay(ifaceName string) *StatisticsDisplay {
 		flowRates:     make(map[uint64]float64),
 		prevDest:      make(map[uint32]uint64),
 		destRates:     make(map[uint32]float64),
-		limitMbps:     100,
+		flowHistories: make(map[uint64][]float64),
+		// fix Y-axis to 1.5 Mbps for consistent scaling across UEs
+		limitMbps: 1.5,
 	}
 
 	if err := ui.Init(); err != nil {
@@ -98,6 +103,9 @@ func (sd *StatisticsDisplay) initWidgets() {
 	selectedSpark := widgets.NewSparkline()
 	selectedSpark.Title = ""
 	selectedSpark.LineColor = ui.ColorCyan
+
+	// Fix sparkline max value to correspond to limitMbps (Mbps -> spark units)
+	selectedSpark.MaxVal = sd.limitMbps * 100
 
 	// Use a single traffic panel with Selected series only.
 	sd.trafficPanel = widgets.NewSparklineGroup(selectedSpark)
@@ -203,12 +211,11 @@ func (sd *StatisticsDisplay) moveSelection(delta int) {
 	if len(keys) > 0 {
 		selIdx := sd.selectedIndex % len(keys)
 		selKey := keys[selIdx]
-		selRate := sd.flowRates[selKey]
 		const historyLen = 60
-		sd.selectedSeries = append(sd.selectedSeries, selRate)
-		if len(sd.selectedSeries) > historyLen {
-			sd.selectedSeries = sd.selectedSeries[len(sd.selectedSeries)-historyLen:]
-		}
+		// load full history for the newly selected flow
+		sd.selectedSeries = padToLen(sd.flowHistories[selKey], historyLen)
+	} else {
+		sd.selectedSeries = nil
 	}
 }
 
@@ -346,21 +353,26 @@ func (sd *StatisticsDisplay) PrintStats(stats map[uint64]PacketStats, unknownCou
 		sd.totalSeries = sd.totalSeries[len(sd.totalSeries)-historyLen:]
 	}
 
-	// selected series value
-	selRate := 0.0
+	// append per-flow histories and set selectedSeries from selected flow
 	keys := make([]uint64, 0, len(sd.flows))
 	for k := range sd.flows {
 		keys = append(keys, k)
 	}
 	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	for k := range sd.flows {
+		hist := sd.flowHistories[k]
+		hist = append(hist, sd.flowRates[k])
+		if len(hist) > historyLen {
+			hist = hist[len(hist)-historyLen:]
+		}
+		sd.flowHistories[k] = hist
+	}
 	if len(keys) > 0 {
 		selIdx := sd.selectedIndex % len(keys)
 		selKey := keys[selIdx]
-		selRate = sd.flowRates[selKey]
-	}
-	sd.selectedSeries = append(sd.selectedSeries, selRate)
-	if len(sd.selectedSeries) > historyLen {
-		sd.selectedSeries = sd.selectedSeries[len(sd.selectedSeries)-historyLen:]
+		sd.selectedSeries = padToLen(sd.flowHistories[selKey], historyLen)
+	} else {
+		sd.selectedSeries = nil
 	}
 
 	sd.prevFlowTime = now
