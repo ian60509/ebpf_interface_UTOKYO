@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -99,23 +100,14 @@ func main() {
 	}
 	defer ebpfMgr.Close()
 
-	// Populate default blacklist (hard-coded 10.60.100.1)
-	if objs.IpBlacklist != nil {
-		if err := pkg.PopulateHardcodedBlacklist(objs.IpBlacklist); err != nil {
-			log.Printf("populate ip blacklist: %v", err)
-		} else {
-			log.Printf("populated ip_blacklist with 10.60.100.1")
+	// Start API server for blacklist management (in goroutine)
+	apiServer := pkg.NewAPIServer(ebpfMgr, "8080")
+	go func() {
+		if err := apiServer.Start(); err != nil && err != http.ErrServerClosed {
+			log.Printf("API server error: %v", err)
 		}
-	}
-
-	// Populate default destination blacklist (hard-coded 1.1.1.1)
-	if objs.DestBlacklist != nil {
-		if err := pkg.PopulateDestBlacklist(objs.DestBlacklist); err != nil {
-			log.Printf("populate dest blacklist: %v", err)
-		} else {
-			log.Printf("populated dest_blacklist with 1.1.1.1")
-		}
-	}
+	}()
+	log.Println("Blacklist API available at http://localhost:8080/api/*")
 
 	// Attach TC BPF program to interface
 	if err := ebpfMgr.AttachXDP(*ifaceName, objs.XdpGtpParse); err != nil {

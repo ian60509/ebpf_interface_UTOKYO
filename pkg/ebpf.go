@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -189,4 +190,82 @@ func (em *EBPFManager) GetDestBlacklist() ([]string, error) {
 		return nil, fmt.Errorf("iterate dest_blacklist: %w", err)
 	}
 	return result, nil
+}
+
+// AddIPBlacklist adds an IP to the ip_blacklist map
+func (em *EBPFManager) AddIPBlacklist(ipStr string) error {
+	if em.ipBlacklist == nil {
+		return fmt.Errorf("ip_blacklist map is not available")
+	}
+
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP: %s", ipStr)
+	}
+
+	key := binary.LittleEndian.Uint32(ip)
+	var val uint8 = 1
+
+	if err := em.ipBlacklist.Update(&key, &val, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("update ip_blacklist: %w", err)
+	}
+	return nil
+}
+
+// RemoveIPBlacklist removes an IP from the ip_blacklist map
+func (em *EBPFManager) RemoveIPBlacklist(ipStr string) error {
+	if em.ipBlacklist == nil {
+		return fmt.Errorf("ip_blacklist map is not available")
+	}
+
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP: %s", ipStr)
+	}
+
+	key := binary.LittleEndian.Uint32(ip)
+
+	if err := em.ipBlacklist.Delete(&key); err != nil {
+		return fmt.Errorf("delete from ip_blacklist: %w", err)
+	}
+	return nil
+}
+
+// AddDestBlacklist adds an IP to the dest_blacklist map
+func (em *EBPFManager) AddDestBlacklist(ipStr string) error {
+	if em.destBlacklist == nil {
+		return fmt.Errorf("dest_blacklist map is not available")
+	}
+
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP: %s", ipStr)
+	}
+
+	key := binary.LittleEndian.Uint32(ip)
+	var val uint8 = 1
+
+	if err := em.destBlacklist.Update(&key, &val, ebpf.UpdateAny); err != nil {
+		return fmt.Errorf("update dest_blacklist: %w", err)
+	}
+	return nil
+}
+
+// RemoveDestBlacklist removes an IP from the dest_blacklist map
+func (em *EBPFManager) RemoveDestBlacklist(ipStr string) error {
+	if em.destBlacklist == nil {
+		return fmt.Errorf("dest_blacklist map is not available")
+	}
+
+	ip := net.ParseIP(ipStr).To4()
+	if ip == nil {
+		return fmt.Errorf("invalid IP: %s", ipStr)
+	}
+
+	key := binary.LittleEndian.Uint32(ip)
+
+	if err := em.destBlacklist.Delete(&key); err != nil {
+		return fmt.Errorf("delete from dest_blacklist: %w", err)
+	}
+	return nil
 }
